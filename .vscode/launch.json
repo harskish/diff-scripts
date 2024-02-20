@@ -1,0 +1,25 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "StableCascade inference",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/stable_cascade_gen_img.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args": [
+                "--effnet_checkpoint_path", "C:/Users/Erik/code/StableCascade/models/effnet_encoder.safetensors",
+                "--stage_a_checkpoint_path", "C:/Users/Erik/code/StableCascade/models/stage_a.safetensors",
+                "--stage_b_checkpoint_path", "C:/Users/Erik/code/StableCascade/models/stage_b.safetensors",
+                "--stage_c_checkpoint_path", "./fp16_stage_c_fp16_fixed.safetensors",
+                "--previewer_checkpoint_path", "C:/Users/Erik/code/StableCascade/models/previewer.safetensors",
+                "--outdir", "./output",
+                "--fp16",
+            ]
+        }
+    ]
+}

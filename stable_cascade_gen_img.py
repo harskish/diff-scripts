@@ -18,7 +18,8 @@ import library.stable_cascade_utils as sc_utils
 import library.device_utils as device_utils
 from library import train_util
 from library.sdxl_model_util import _load_state_dict_on_device
-
+import pyviewer.single_image_viewer as siv
+siv.init('Stable Cascade viewer', hidden=True)
 
 def main(args):
     device = device_utils.get_preferred_device()
@@ -137,10 +138,9 @@ def main(args):
     # height, width = 1024, 1024
 
     while True:
-        print("type caption:")
         # if Ctrl+Z is pressed, it will raise EOFError
         try:
-            caption = input()
+            caption = input("Type caption: ")
         except EOFError:
             break
 
@@ -262,13 +262,16 @@ def main(args):
             conditions_b["effnet"] = sampled_c
             unconditions_b["effnet"] = torch.zeros_like(sampled_c)
 
+        siv.inst.show()
+
         if previewer is not None:
             with torch.no_grad(), torch.cuda.amp.autocast(dtype=dtype):
                 preview = previewer(sampled_c)
                 preview = preview.clamp(0, 1)
-            preview = preview.permute(0, 2, 3, 1).squeeze(0)
-            preview = preview.detach().float().cpu().numpy()
-            preview = Image.fromarray((preview * 255).astype(np.uint8))
+            preview = preview.permute(0, 2, 3, 1).squeeze(0).detach().float()
+            preview = np.uint8(preview.cpu().numpy() * 255)
+            siv.draw(img_hwc=preview)
+            preview = Image.fromarray(preview)
 
             timestamp_str = time.strftime("%Y%m%d_%H%M%S")
             os.makedirs(args.outdir, exist_ok=True)
@@ -291,7 +294,7 @@ def main(args):
                 timesteps=b_timesteps,
                 t_start=b_t_start,
             )
-            for sampled_b, _, _ in tqdm(sampling_b, total=b_t_start):
+            for sampled_b, _, _ in tqdm(sampling_b, total=b_timesteps):
                 sampled_b = sampled_b
 
         if args.lowvram:
@@ -312,6 +315,7 @@ def main(args):
         sampled = sampled.mul(255).to(dtype=torch.uint8)
         sampled = sampled.permute(0, 2, 3, 1)
         sampled = sampled.cpu().numpy()
+        siv.draw(img_hwc=sampled[0])
         sampled = Image.fromarray(sampled[0])
 
         timestamp_str = time.strftime("%Y%m%d_%H%M%S")
@@ -336,7 +340,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--network_module",
         type=str,
-        default=None,
+        default=[],
         nargs="*",
         help="additional network module to use / 追加ネットワークを使う時そのモジュール名",
     )

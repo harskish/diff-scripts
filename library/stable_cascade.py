@@ -13,6 +13,8 @@ import torchvision
 
 
 MODEL_VERSION_STABLE_CASCADE = "stable_cascade"
+def check_scale(tensor):
+    return torch.mean(torch.abs(tensor))
 
 
 # region VectorQuantize
@@ -211,16 +213,28 @@ class ResBlock(nn.Module):
         )
 
         self.gradient_checkpointing = False
+        self.factor = 1
+
+    def set_factor(self, k):
+        if self.factor!=1:
+            return
+        self.factor = k
+        self.depthwise.bias.data /= k
+        self.channelwise[4].weight.data /= k
+        self.channelwise[4].bias.data /= k
 
     def set_gradient_checkpointing(self, value):
         self.gradient_checkpointing = value
 
     def forward_body(self, x, x_skip=None):
         x_res = x
+        #x = x /self.factor
         x = self.norm(self.depthwise(x))
         if x_skip is not None:
             x = torch.cat([x, x_skip], dim=1)
-        x = self.channelwise(x.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
+        x = self.channelwise(x.permute(0, 2, 3, 1)).permute(0, 3, 1, 2) # * self.factor 
+        # if check_scale(x) > 5:
+        #     self.scale = 0.1
         return x + x_res
 
     def forward(self, x, x_skip=None):
@@ -249,13 +263,22 @@ class AttnBlock(nn.Module):
         self.kv_mapper = nn.Sequential(nn.SiLU(), Linear(c_cond, c))
 
         self.gradient_checkpointing = False
+        self.factor = 1
+
+    def set_factor(self, k):
+        if self.factor!=1:
+            return
+        self.factor = k
+        self.attention.attn.out_proj.weight.data /= k
+        if self.attention.attn.out_proj.bias is not None:
+            self.attention.attn.out_proj.bias.data /= k
 
     def set_gradient_checkpointing(self, value):
         self.gradient_checkpointing = value
 
     def forward_body(self, x, kv):
         kv = self.kv_mapper(kv)
-        x = x + self.attention(self.norm(x), kv, self_attn=self.self_attn)
+        x = x + self.attention(self.norm(x), kv, self_attn=self.self_attn) # * self.factor
         return x
 
     def forward(self, x, kv):
@@ -316,6 +339,32 @@ class TimestepBlock(nn.Module):
         self.conds = conds
         for cname in conds:
             setattr(self, f"mapper_{cname}", Linear(c_timestep, c * 2))
+        self.factor = 1
+
+    def set_factor(self, k, ext_k):
+        if self.factor!=1:
+            return
+        self.factor = k
+        k_factor = k/ext_k
+        a_weight_factor = 1/k_factor
+        b_weight_factor = 1/k
+        a_bias_offset = - ((k_factor - 1)/(k_factor))/(len(self.conds) + 1)
+        
+        for module in [self.mapper, *(getattr(self, f"mapper_{cname}") for cname in self.conds)]:
+            a_bias, b_bias = module.bias.data.chunk(2, dim=0)
+            a_weight, b_weight = module.weight.data.chunk(2, dim=0)
+            module.weight.data.copy_(
+                torch.concat([
+                    a_weight * a_weight_factor,
+                    b_weight * b_weight_factor
+                ])
+            )
+            module.bias.data.copy_(
+                torch.concat([
+                    a_bias * a_weight_factor + a_bias_offset,
+                    b_bias * b_weight_factor
+                ])
+            )
 
     def forward(self, x, t):
         t = t.chunk(len(self.conds) + 1, dim=1)
@@ -323,7 +372,7 @@ class TimestepBlock(nn.Module):
         for i, c in enumerate(self.conds):
             ac, bc = getattr(self, f"mapper_{c}")(t[i + 1])[:, :, None, None].chunk(2, dim=1)
             a, b = a + ac, b + bc
-        return x * (1 + a) + b
+        return (x * (1 + a) + b) # * self.factor
 
 
 class UpDownBlock2d(nn.Module):
@@ -969,9 +1018,13 @@ class StageC(nn.Module):
     def _up_decode(self, level_outputs, r_embed, clip, cnet=None):
         x = level_outputs[0]
         block_group = zip(self.up_blocks, self.up_upscalers, self.up_repeat_mappers)
+        now_factor = 1
         for i, (up_block, upscaler, repmap) in enumerate(block_group):
             for j in range(len(repmap) + 1):
                 for k, block in enumerate(up_block):
+                    # if getattr(block, "factor", 1) > 1:
+                    #     now_factor = -getattr(block, "factor", 1)
+                    # scale = check_scale(x)
                     if isinstance(block, ResBlock) or (
                         hasattr(block, "_fsdp_wrapped_module") and isinstance(block._fsdp_wrapped_module, ResBlock)
                     ):
@@ -983,19 +1036,35 @@ class StageC(nn.Module):
                             if next_cnet is not None:
                                 x = x + nn.functional.interpolate(next_cnet, size=x.shape[-2:], mode="bilinear", align_corners=True)
                         x = block(x, skip)
+                        # if now_factor > 1 and block.factor == 1:
+                        #     block.set_factor(now_factor)
                     elif isinstance(block, AttnBlock) or (
                         hasattr(block, "_fsdp_wrapped_module") and isinstance(block._fsdp_wrapped_module, AttnBlock)
                     ):
                         x = block(x, clip)
+                        # if now_factor > 1 and block.factor == 1:
+                        #     block.set_factor(now_factor)
                     elif isinstance(block, TimestepBlock) or (
                         hasattr(block, "_fsdp_wrapped_module") and isinstance(block._fsdp_wrapped_module, TimestepBlock)
                     ):
                         x = block(x, r_embed)
+                        # scale = check_scale(x)
+                        # if now_factor > 1 and block.factor == 1:
+                        #     block.set_factor(now_factor, now_factor)
+                        #     pass
+                        # elif i==1:
+                        #     now_factor = 5
+                        #     block.set_factor(now_factor, 1)
                     else:
                         x = block(x)
+                    # scale = check_scale(x)
                 if j < len(repmap):
                     x = repmap[j](x)
             x = upscaler(x)
+            # if now_factor > 1:
+            #     if isinstance(upscaler, UpDownBlock2d):
+            #         upscaler.blocks[1].weight.data /= now_factor
+            #         upscaler.blocks[1].bias.data /= now_factor
         return x
 
     def forward(self, x, r, clip_text, clip_text_pooled, clip_img, cnet=None, **kwargs):

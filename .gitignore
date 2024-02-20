@@ -5,4 +5,8 @@ venv
 *.egg-info
 build
 .vscode
+!.vscode/launch.json
 wandb
+output/
+*.safetensors
+*.ini
