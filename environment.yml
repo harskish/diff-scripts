@@ -1,4 +1,4 @@
-name: sd-scripts
+name: diff-scripts
 channels:
   - defaults
 dependencies:

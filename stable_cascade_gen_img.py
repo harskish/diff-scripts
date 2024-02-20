@@ -158,11 +158,11 @@ def main(args):
         shift = 2
         t_start = 1.0
         negative_prompt = ""
-        seed = None
 
         caption_tokens = []
         i = 0
         while i < len(tokens):
+            seed = None
             token = tokens[i]
             if i == len(tokens) - 1:
                 caption_tokens.append(token)
@@ -233,6 +233,8 @@ def main(args):
         unconditions_b.update(unconditions)
 
         # seed everything
+        seed = seed or np.random.randint(1_000)
+        print('Seed:', seed)
         if seed is not None:
             torch.manual_seed(seed)
             torch.cuda.manual_seed_all(seed)
@@ -271,11 +273,10 @@ def main(args):
             preview = preview.permute(0, 2, 3, 1).squeeze(0).detach().float()
             preview = np.uint8(preview.cpu().numpy() * 255)
             siv.draw(img_hwc=preview)
-            preview = Image.fromarray(preview)
-
-            timestamp_str = time.strftime("%Y%m%d_%H%M%S")
-            os.makedirs(args.outdir, exist_ok=True)
-            preview.save(os.path.join(args.outdir, f"preview_{timestamp_str}.png"))
+            #preview = Image.fromarray(preview)
+            #timestamp_str = time.strftime("%Y%m%d_%H%M%S")
+            #os.makedirs(args.outdir, exist_ok=True)
+            #preview.save(os.path.join(args.outdir, f"preview_{timestamp_str}.png"))
 
         if args.lowvram:
             generator_c = generator_c.to(loading_device)
@@ -320,7 +321,7 @@ def main(args):
 
         timestamp_str = time.strftime("%Y%m%d_%H%M%S")
         os.makedirs(args.outdir, exist_ok=True)
-        sampled.save(os.path.join(args.outdir, f"sampled_{timestamp_str}.png"))
+        sampled.save(os.path.join(args.outdir, f"sampled_{timestamp_str}.jpg"))
 
 
 if __name__ == "__main__":
